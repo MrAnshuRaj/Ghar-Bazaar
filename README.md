@@ -27,8 +27,9 @@ The app branding uses `Ghar Bazaar` with the tagline: `Your neighborhood grocery
    - iOS: place `GoogleService-Info.plist` in `ios/Runner/`
 4. Configure Google Sign-In platform setup:
    - Android and iOS still need their platform OAuth setup from the official `google_sign_in` package docs.
-5. Add your ImgBB API key in `lib/core/constants/app_secrets.dart`.
-6. Run the app with `flutter run`.
+5. Run the app with your ImgBB key via dart define:
+   - `flutter run --dart-define=IMGBB_API_KEY=your_imgbb_api_key`
+6. (Optional) Use a VS Code launch config or CI build args to always pass `IMGBB_API_KEY`.
 7. Create Firebase Auth users normally from the app or Firebase Console.
 
 ## Project Structure

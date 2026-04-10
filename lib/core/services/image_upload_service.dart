@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:ghar_bazaar/core/constants/app_secrets.dart';
 
 class ImageUploadService {
@@ -32,10 +34,26 @@ class ImageUploadService {
     if (!await file.exists()) {
       throw const ImageUploadException('Selected image could not be found.');
     }
-    if (imgbbApiKey.trim().isEmpty || imgbbApiKey == 'PASTE_API_KEY_HERE') {
-      throw const ImageUploadException('ImgBB API key is missing.');
+    if (!hasImgbbApiKey) {
+      if (kDebugMode) {
+        debugPrint('[config] $imgbbApiKeySetupMessage Using local image path.');
+      }
+      return _persistImageLocally(file);
     }
 
+    try {
+      return await _uploadToImgbb(file);
+    } on ImageUploadException catch (error) {
+      if (kDebugMode) {
+        debugPrint(
+          '[image-upload] Remote upload failed: $error. Falling back to local image path.',
+        );
+      }
+      return _persistImageLocally(file);
+    }
+  }
+
+  Future<String> _uploadToImgbb(File file) async {
     final bytes = await file.readAsBytes();
     late final http.Response response;
     try {
@@ -93,6 +111,33 @@ class ImageUploadService {
     }
 
     return imageUrl;
+  }
+
+  Future<String> _persistImageLocally(File sourceFile) async {
+    final appDir = await getApplicationDocumentsDirectory();
+    final uploadsDir = Directory(
+      '${appDir.path}${Platform.pathSeparator}marketplace_uploads',
+    );
+    if (!await uploadsDir.exists()) {
+      await uploadsDir.create(recursive: true);
+    }
+
+    final extension = _extractExtension(sourceFile.path);
+    final fileName =
+        'img_${DateTime.now().microsecondsSinceEpoch}$extension';
+    final persisted = await sourceFile.copy(
+      '${uploadsDir.path}${Platform.pathSeparator}$fileName',
+    );
+    return persisted.path;
+  }
+
+  String _extractExtension(String path) {
+    final fileName = path.split(Platform.pathSeparator).last;
+    final dotIndex = fileName.lastIndexOf('.');
+    if (dotIndex <= 0 || dotIndex == fileName.length - 1) {
+      return '';
+    }
+    return fileName.substring(dotIndex);
   }
 
   Future<String?> pickAndUploadImage({
