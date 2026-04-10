@@ -1,8 +1,8 @@
 # Ghar Bazaar
 
-Ghar Bazaar is a hyperlocal grocery marketplace MVP built in Flutter for Android and iOS. The app uses a polished product-focused experience for two roles:
+Ghar Bazaar is a hyperlocal grocery marketplace app built with Flutter for Android and iOS. It provides a polished product-focused experience for two roles:
 
-- Customer: browse nearby local shops by locality, discover products, add items to cart, and place sample orders.
+- Customer: browse nearby local shops by locality, discover products, add items to cart, and place orders.
 - Vendor: create a local grocery storefront, manage products, and track incoming orders.
 
 The app branding uses `Ghar Bazaar` with the tagline: `Your neighborhood grocery market, now online.`
@@ -16,7 +16,7 @@ The app branding uses `Ghar Bazaar` with the tagline: `Your neighborhood grocery
 - Vendor dashboard, shop setup, product CRUD, and manual order status updates
 - Riverpod state management and GoRouter navigation
 - Firebase-backed authentication and Firestore data flow
-- Seeded marketplace data for shops and products so the app is interview-ready immediately
+- ImgBB-based image upload for shops and products
 
 ## Setup
 
@@ -139,7 +139,7 @@ lib/
 ## Assumptions
 
 - The app targets Android and iOS only.
-- Payments are mocked for MVP demo purposes.
+- Payments are currently mocked in the checkout flow.
 - Delivery partners are mentioned in trust/onboarding messaging only.
 - Firebase Auth and Firestore are expected to be configured for sign-in and profile flows.
 - Product and shop images upload to ImgBB and only the returned image URL is stored.

@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:ghar_bazaar/core/constants/app_constants.dart';
 import 'package:ghar_bazaar/core/constants/demo_content.dart';
 import 'package:ghar_bazaar/data/models/app_user.dart';
@@ -44,6 +45,49 @@ class FirebaseMarketplaceDataSource implements MarketplaceDataSource {
       });
     }
     return MarketplaceDataException(fallbackMessage);
+  }
+
+  void _logDebug(String message) {
+    if (kDebugMode) {
+      debugPrint('[FirebaseMarketplaceDataSource] $message');
+    }
+  }
+
+  bool _isTransientFirestoreError(Object error) {
+    if (error is! FirebaseException) {
+      return false;
+    }
+    return switch (error.code) {
+      'unavailable' => true,
+      'cancelled' => true,
+      'deadline-exceeded' => true,
+      'resource-exhausted' => true,
+      _ => false,
+    };
+  }
+
+  Duration _retryDelay(int attempt) {
+    final seconds = attempt <= 1 ? 1 : (attempt <= 2 ? 2 : 4);
+    return Duration(seconds: seconds);
+  }
+
+  Product? _parseProductDoc(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc, {
+    required String context,
+  }) {
+    final data = Map<String, dynamic>.from(doc.data());
+    final existingId = data['id']?.toString().trim();
+    data['id'] = (existingId != null && existingId.isNotEmpty)
+        ? existingId
+        : doc.id;
+    try {
+      return Product.fromMap(data);
+    } catch (error, stackTrace) {
+      _logDebug(
+        'Skipped malformed product doc "$context/${doc.id}": $error\n$stackTrace',
+      );
+      return null;
+    }
   }
 
   @override
@@ -111,19 +155,39 @@ class FirebaseMarketplaceDataSource implements MarketplaceDataSource {
   @override
   Stream<List<Shop>> watchShopsByLocality(String locality) {
     return (() async* {
+      _logDebug('watchShopsByLocality subscribed locality=$locality');
       try {
-        await for (final snapshot
-            in _shops.where('locality', isEqualTo: locality).snapshots()) {
-          final shops =
-              snapshot.docs.map((doc) => Shop.fromMap(doc.data())).toList()
-                ..sort((a, b) => b.rating.compareTo(a.rating));
-          yield shops;
+        var attempt = 0;
+        while (true) {
+          try {
+            await for (final snapshot
+                in _shops.where('locality', isEqualTo: locality).snapshots()) {
+              final shops =
+                  snapshot.docs.map((doc) => Shop.fromMap(doc.data())).toList()
+                    ..sort((a, b) => b.rating.compareTo(a.rating));
+              attempt = 0;
+              yield shops;
+            }
+            return;
+          } catch (error) {
+            if (_isTransientFirestoreError(error)) {
+              attempt += 1;
+              final delay = _retryDelay(attempt);
+              _logDebug(
+                'Transient watchShopsByLocality failure ($error). Retrying in ${delay.inSeconds}s',
+              );
+              yield const <Shop>[];
+              await Future<void>.delayed(delay);
+              continue;
+            }
+            throw _dataException(
+              error,
+              'Unable to load shops for this locality right now.',
+            );
+          }
         }
-      } catch (error) {
-        throw _dataException(
-          error,
-          'Unable to load shops for this locality right now.',
-        );
+      } finally {
+        _logDebug('watchShopsByLocality unsubscribed locality=$locality');
       }
     })();
   }
@@ -131,23 +195,43 @@ class FirebaseMarketplaceDataSource implements MarketplaceDataSource {
   @override
   Stream<Shop?> watchVendorShop(String vendorId) {
     return (() async* {
+      _logDebug('watchVendorShop subscribed vendorId=$vendorId');
       try {
-        await for (final snapshot
-            in _shops
-                .where('vendorId', isEqualTo: vendorId)
-                .limit(1)
-                .snapshots()) {
-          if (snapshot.docs.isEmpty) {
-            yield null;
-            continue;
+        var attempt = 0;
+        while (true) {
+          try {
+            await for (final snapshot
+                in _shops
+                    .where('vendorId', isEqualTo: vendorId)
+                    .limit(1)
+                    .snapshots()) {
+              if (snapshot.docs.isEmpty) {
+                yield null;
+                continue;
+              }
+              attempt = 0;
+              yield Shop.fromMap(snapshot.docs.first.data());
+            }
+            return;
+          } catch (error) {
+            if (_isTransientFirestoreError(error)) {
+              attempt += 1;
+              final delay = _retryDelay(attempt);
+              _logDebug(
+                'Transient watchVendorShop failure ($error). Retrying in ${delay.inSeconds}s',
+              );
+              yield null;
+              await Future<void>.delayed(delay);
+              continue;
+            }
+            throw _dataException(
+              error,
+              'Unable to load your shop details right now.',
+            );
           }
-          yield Shop.fromMap(snapshot.docs.first.data());
         }
-      } catch (error) {
-        throw _dataException(
-          error,
-          'Unable to load your shop details right now.',
-        );
+      } finally {
+        _logDebug('watchVendorShop unsubscribed vendorId=$vendorId');
       }
     })();
   }
@@ -173,19 +257,48 @@ class FirebaseMarketplaceDataSource implements MarketplaceDataSource {
   @override
   Stream<List<Product>> watchShopProducts(String shopId) {
     return (() async* {
+      _logDebug('watchShopProducts subscribed for shopId=$shopId');
       try {
-        await for (final snapshot
-            in _products.where('shopId', isEqualTo: shopId).snapshots()) {
-          final products =
-              snapshot.docs
-                  .map((doc) => Product.fromMap(doc.data()))
-                  .where((product) => product.isAvailable)
-                  .toList()
-                ..sort((a, b) => a.name.compareTo(b.name));
-          yield products;
+        var attempt = 0;
+        while (true) {
+          try {
+            await for (final snapshot
+                in _products.where('shopId', isEqualTo: shopId).snapshots()) {
+              final products = <Product>[];
+              for (final doc in snapshot.docs) {
+                final parsed = _parseProductDoc(
+                  doc,
+                  context: 'watchShopProducts:$shopId',
+                );
+                if (parsed == null || !parsed.isAvailable) {
+                  continue;
+                }
+                products.add(parsed);
+              }
+              products.sort((a, b) => a.name.compareTo(b.name));
+              attempt = 0;
+              _logDebug(
+                'watchShopProducts shopId=$shopId returned ${products.length} available products from ${snapshot.docs.length} docs',
+              );
+              yield products;
+            }
+            return;
+          } catch (error) {
+            if (_isTransientFirestoreError(error)) {
+              attempt += 1;
+              final delay = _retryDelay(attempt);
+              _logDebug(
+                'Transient watchShopProducts failure ($error). Retrying in ${delay.inSeconds}s',
+              );
+              yield const <Product>[];
+              await Future<void>.delayed(delay);
+              continue;
+            }
+            throw _dataException(error, 'Unable to load shop items right now.');
+          }
         }
-      } catch (error) {
-        throw _dataException(error, 'Unable to load shop items right now.');
+      } finally {
+        _logDebug('watchShopProducts unsubscribed for shopId=$shopId');
       }
     })();
   }
@@ -193,16 +306,51 @@ class FirebaseMarketplaceDataSource implements MarketplaceDataSource {
   @override
   Stream<List<Product>> watchVendorProducts(String vendorId) {
     return (() async* {
+      _logDebug('watchVendorProducts subscribed vendorId=$vendorId');
       try {
-        await for (final snapshot
-            in _products.where('vendorId', isEqualTo: vendorId).snapshots()) {
-          final products =
-              snapshot.docs.map((doc) => Product.fromMap(doc.data())).toList()
-                ..sort((a, b) => a.category.label.compareTo(b.category.label));
-          yield products;
+        var attempt = 0;
+        while (true) {
+          try {
+            await for (final snapshot
+                in _products
+                    .where('vendorId', isEqualTo: vendorId)
+                    .snapshots()) {
+              final products = <Product>[];
+              for (final doc in snapshot.docs) {
+                final parsed = _parseProductDoc(
+                  doc,
+                  context: 'watchVendorProducts:$vendorId',
+                );
+                if (parsed != null) {
+                  products.add(parsed);
+                }
+              }
+              products.sort(
+                (a, b) => a.category.label.compareTo(b.category.label),
+              );
+              attempt = 0;
+              yield products;
+            }
+            return;
+          } catch (error) {
+            if (_isTransientFirestoreError(error)) {
+              attempt += 1;
+              final delay = _retryDelay(attempt);
+              _logDebug(
+                'Transient watchVendorProducts failure ($error). Retrying in ${delay.inSeconds}s',
+              );
+              yield const <Product>[];
+              await Future<void>.delayed(delay);
+              continue;
+            }
+            throw _dataException(
+              error,
+              'Unable to load your products right now.',
+            );
+          }
         }
-      } catch (error) {
-        throw _dataException(error, 'Unable to load your products right now.');
+      } finally {
+        _logDebug('watchVendorProducts unsubscribed vendorId=$vendorId');
       }
     })();
   }
@@ -213,7 +361,12 @@ class FirebaseMarketplaceDataSource implements MarketplaceDataSource {
     if (!snapshot.exists || snapshot.data() == null) {
       return null;
     }
-    return Product.fromMap(snapshot.data()!);
+    final data = Map<String, dynamic>.from(snapshot.data()!);
+    final existingId = data['id']?.toString().trim();
+    data['id'] = (existingId != null && existingId.isNotEmpty)
+        ? existingId
+        : snapshot.id;
+    return Product.fromMap(data);
   }
 
   Future<void> _syncShopCategories(String shopId) async {
@@ -225,14 +378,21 @@ class FirebaseMarketplaceDataSource implements MarketplaceDataSource {
     final productsSnapshot = await _products
         .where('shopId', isEqualTo: shopId)
         .get();
-    final categories =
-        productsSnapshot.docs
-            .map((doc) => Product.fromMap(doc.data()).category.label)
-            .toSet()
-            .toList()
-          ..sort();
-    final shop = Shop.fromMap(shopData).copyWith(categories: categories);
-    await _shops.doc(shopId).set(shop.toMap(), SetOptions(merge: true));
+    final categories = <String>{};
+    for (final doc in productsSnapshot.docs) {
+      final parsed = _parseProductDoc(
+        doc,
+        context: 'syncShopCategories:$shopId',
+      );
+      if (parsed != null) {
+        categories.add(parsed.category.label);
+      }
+    }
+    final sortedCategories = categories.toList()..sort();
+    final syncedShop = Shop.fromMap(
+      shopData,
+    ).copyWith(categories: sortedCategories);
+    await _shops.doc(shopId).set(syncedShop.toMap(), SetOptions(merge: true));
   }
 
   @override
@@ -252,7 +412,7 @@ class FirebaseMarketplaceDataSource implements MarketplaceDataSource {
     final snapshot = await _products.doc(productId).get();
     final product = snapshot.data() == null
         ? null
-        : Product.fromMap(snapshot.data()!);
+        : Product.fromMap({...snapshot.data()!, 'id': snapshot.id});
     await _products.doc(productId).delete();
     if (product != null) {
       await _syncShopCategories(product.shopId);

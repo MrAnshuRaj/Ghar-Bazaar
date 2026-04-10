@@ -22,6 +22,8 @@ import 'package:ghar_bazaar/data/sources/local/local_database.dart';
 import 'package:ghar_bazaar/data/sources/local/local_marketplace_data_source.dart';
 import 'package:ghar_bazaar/data/sources/marketplace_data_source.dart';
 
+bool _seedInitializationStarted = false;
+
 final bootstrapProvider = Provider<AppBootstrap>((ref) {
   throw UnimplementedError('bootstrapProvider must be overridden in main()');
 });
@@ -64,7 +66,30 @@ final authRepositoryProvider = Provider<AuthRepository>((ref) {
 });
 
 final appInitializationProvider = FutureProvider<void>((ref) async {
-  await ref.read(marketplaceRepositoryProvider).seedDemoData();
+  if (_seedInitializationStarted) {
+    if (kDebugMode) {
+      debugPrint(
+        '[appInitializationProvider] seed already attempted, skipping',
+      );
+    }
+    return;
+  }
+  _seedInitializationStarted = true;
+  if (kDebugMode) {
+    debugPrint('[appInitializationProvider] running demo seed initialization');
+  }
+  try {
+    await ref
+        .read(marketplaceRepositoryProvider)
+        .seedDemoData()
+        .timeout(const Duration(seconds: 6));
+  } catch (error) {
+    if (kDebugMode) {
+      debugPrint(
+        '[appInitializationProvider] seed skipped due to non-fatal error: $error',
+      );
+    }
+  }
 });
 
 final authStateChangesProvider = StreamProvider<AuthSession?>((ref) {
@@ -124,6 +149,14 @@ final shopProductsProvider = StreamProvider.family<List<Product>, String>((
   ref,
   shopId,
 ) {
+  if (kDebugMode) {
+    debugPrint('[shopProductsProvider] subscribe shopId=$shopId');
+  }
+  ref.onDispose(() {
+    if (kDebugMode) {
+      debugPrint('[shopProductsProvider] dispose shopId=$shopId');
+    }
+  });
   return ref.watch(marketplaceRepositoryProvider).watchShopProducts(shopId);
 });
 
@@ -140,6 +173,14 @@ final vendorProductsProvider = StreamProvider<List<Product>>((ref) {
   if (session == null) {
     return Stream.value(const []);
   }
+  if (kDebugMode) {
+    debugPrint('[vendorProductsProvider] subscribe vendorId=${session.uid}');
+  }
+  ref.onDispose(() {
+    if (kDebugMode) {
+      debugPrint('[vendorProductsProvider] dispose vendorId=${session.uid}');
+    }
+  });
   return ref
       .watch(marketplaceRepositoryProvider)
       .watchVendorProducts(session.uid);

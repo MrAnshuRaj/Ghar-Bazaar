@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 class MarketplaceImage extends StatelessWidget {
@@ -47,14 +48,28 @@ class MarketplaceImage extends StatelessWidget {
       return placeholder;
     }
     if (!isWebUrl) {
-      final file = File(normalizedUrl);
-      if (file.existsSync()) {
+      if (kIsWeb) {
+        return placeholder;
+      }
+      try {
         return ClipRRect(
           borderRadius: borderRadius,
-          child: Image.file(file, height: height, width: width, fit: fit),
+          child: Image.file(
+            File(normalizedUrl),
+            height: height,
+            width: width,
+            fit: fit,
+            errorBuilder: (_, _, __) => placeholder,
+          ),
         );
+      } catch (error) {
+        if (kDebugMode) {
+          debugPrint(
+            '[MarketplaceImage] Invalid local image path "$normalizedUrl": $error',
+          );
+        }
+        return placeholder;
       }
-      return placeholder;
     }
     return ClipRRect(
       borderRadius: borderRadius,

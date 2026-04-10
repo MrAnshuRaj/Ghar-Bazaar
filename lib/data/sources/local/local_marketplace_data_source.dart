@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:ghar_bazaar/core/constants/app_constants.dart';
 import 'package:ghar_bazaar/data/models/app_user.dart';
 import 'package:ghar_bazaar/data/models/customer_profile.dart';
@@ -16,6 +17,31 @@ class LocalMarketplaceDataSource implements MarketplaceDataSource {
 
   final LocalDatabase _database;
   final StreamController<void> _changes = StreamController<void>.broadcast();
+
+  void _logDebug(String message) {
+    if (kDebugMode) {
+      debugPrint('[LocalMarketplaceDataSource] $message');
+    }
+  }
+
+  List<Product> _safeParseProducts(
+    List<Map<String, dynamic>> rawProducts, {
+    required String context,
+  }) {
+    final parsed = <Product>[];
+    for (final raw in rawProducts) {
+      try {
+        final map = Map<String, dynamic>.from(raw);
+        map['id'] = map['id']?.toString().trim() ?? '';
+        parsed.add(Product.fromMap(map));
+      } catch (error, stackTrace) {
+        _logDebug(
+          'Skipped malformed local product in $context: $error\n$stackTrace',
+        );
+      }
+    }
+    return parsed;
+  }
 
   Future<Map<String, dynamic>> _snapshot() async {
     await _database.ensureSeeded();
@@ -43,10 +69,10 @@ class LocalMarketplaceDataSource implements MarketplaceDataSource {
 
   Future<void> _syncShopCategories(String shopId) async {
     final snapshot = await _snapshot();
-    final products = _collection(snapshot, 'products')
-        .map(Product.fromMap)
-        .where((product) => product.shopId == shopId)
-        .toList();
+    final products = _safeParseProducts(
+      _collection(snapshot, 'products'),
+      context: 'syncShopCategories:$shopId',
+    ).where((product) => product.shopId == shopId).toList();
     final shops = _collection(snapshot, 'shops').map(Shop.fromMap).toList();
     final index = shops.indexWhere((shop) => shop.id == shopId);
     if (index == -1) {
@@ -225,10 +251,10 @@ class LocalMarketplaceDataSource implements MarketplaceDataSource {
   @override
   Stream<List<Product>> watchShopProducts(String shopId) {
     return _watchList(() async {
-      final products = _collection(
-        await _snapshot(),
-        'products',
-      ).map(Product.fromMap).toList()..sort((a, b) => a.name.compareTo(b.name));
+      final products = _safeParseProducts(
+        _collection(await _snapshot(), 'products'),
+        context: 'watchShopProducts:$shopId',
+      )..sort((a, b) => a.name.compareTo(b.name));
       return products.where((product) => product.shopId == shopId).toList();
     });
   }
@@ -236,22 +262,20 @@ class LocalMarketplaceDataSource implements MarketplaceDataSource {
   @override
   Stream<List<Product>> watchVendorProducts(String vendorId) {
     return _watchList(() async {
-      final products =
-          _collection(
-              await _snapshot(),
-              'products',
-            ).map(Product.fromMap).toList()
-            ..sort((a, b) => a.category.label.compareTo(b.category.label));
+      final products = _safeParseProducts(
+        _collection(await _snapshot(), 'products'),
+        context: 'watchVendorProducts:$vendorId',
+      )..sort((a, b) => a.category.label.compareTo(b.category.label));
       return products.where((product) => product.vendorId == vendorId).toList();
     });
   }
 
   @override
   Future<Product?> getProduct(String productId) async {
-    final products = _collection(
-      await _snapshot(),
-      'products',
-    ).map(Product.fromMap).toList();
+    final products = _safeParseProducts(
+      _collection(await _snapshot(), 'products'),
+      context: 'getProduct:$productId',
+    );
     for (final product in products) {
       if (product.id == productId) {
         return product;
@@ -262,10 +286,10 @@ class LocalMarketplaceDataSource implements MarketplaceDataSource {
 
   @override
   Future<void> upsertProduct(Product product) async {
-    final products = _collection(
-      await _snapshot(),
-      'products',
-    ).map(Product.fromMap).toList();
+    final products = _safeParseProducts(
+      _collection(await _snapshot(), 'products'),
+      context: 'upsertProduct:${product.id}',
+    );
     final index = products.indexWhere((item) => item.id == product.id);
     if (index == -1) {
       products.add(product);
@@ -282,10 +306,10 @@ class LocalMarketplaceDataSource implements MarketplaceDataSource {
   @override
   Future<void> deleteProduct(String productId) async {
     final snapshot = await _snapshot();
-    final products = _collection(
-      snapshot,
-      'products',
-    ).map(Product.fromMap).toList();
+    final products = _safeParseProducts(
+      _collection(snapshot, 'products'),
+      context: 'deleteProduct:$productId',
+    );
     final product = products.where((item) => item.id == productId).firstOrNull;
     if (product == null) {
       return;

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:ghar_bazaar/core/utils/app_feedback.dart';
@@ -26,6 +27,101 @@ class _ShopDetailScreenState extends ConsumerState<ShopDetailScreen> {
   final _searchController = TextEditingController();
   String _selectedCategory = 'All';
   String? _lastFeedbackMessage;
+  ProviderSubscription<AsyncValue<List<Product>>>? _shopProductsSubscription;
+  ProviderSubscription<AsyncValue<Shop?>>? _shopSubscription;
+
+  void _logDebug(String message) {
+    if (kDebugMode) {
+      debugPrint('[ShopDetailScreen] $message');
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _logDebug('Opened shop detail for shopId=${widget.shopId}');
+    _attachProviderListeners();
+  }
+
+  @override
+  void didUpdateWidget(covariant ShopDetailScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.shopId != widget.shopId ||
+        oldWidget.initialShop != widget.initialShop) {
+      _logDebug(
+        'Switched shop detail from ${oldWidget.shopId} to ${widget.shopId}',
+      );
+      _shopProductsSubscription?.close();
+      _shopSubscription?.close();
+      _attachProviderListeners();
+    }
+  }
+
+  void _attachProviderListeners() {
+    _shopProductsSubscription = ref.listenManual<AsyncValue<List<Product>>>(
+      shopProductsProvider(widget.shopId),
+      (previous, next) {
+        next.whenOrNull(
+          error: (error, stackTrace) {
+            if (!mounted) {
+              _logDebug(
+                'Skipping products error feedback after dispose for shopId=${widget.shopId}',
+              );
+              return;
+            }
+            _showFeedback(
+              'Could not load shop items. ${error.toString()}',
+              isError: true,
+            );
+          },
+          data: (products) {
+            _logDebug(
+              'Firestore returned ${products.length} products for shopId=${widget.shopId}',
+            );
+            final hasCategories =
+                (widget.initialShop?.categories ?? const <String>[]).isNotEmpty;
+            if (products.isEmpty && hasCategories) {
+              _showFeedback(
+                'This shop has categories but no items were returned. Pull to refresh or check Firestore data.',
+                isError: true,
+              );
+            }
+          },
+        );
+      },
+      fireImmediately: true,
+    );
+    if (widget.initialShop == null) {
+      _shopSubscription = ref.listenManual<AsyncValue<Shop?>>(
+        shopProvider(widget.shopId),
+        (previous, next) {
+          next.whenOrNull(
+            error: (error, stackTrace) {
+              if (!mounted) {
+                _logDebug(
+                  'Skipping shop error feedback after dispose for shopId=${widget.shopId}',
+                );
+                return;
+              }
+              _showFeedback(
+                'Could not load shop details. ${error.toString()}',
+                isError: true,
+              );
+            },
+            data: (shop) {
+              if (shop == null) {
+                _showFeedback(
+                  'Shop details could not be found.',
+                  isError: true,
+                );
+              }
+            },
+          );
+        },
+        fireImmediately: true,
+      );
+    }
+  }
 
   void _showFeedback(String message, {bool isError = false}) {
     if (!mounted || message.trim().isEmpty || _lastFeedbackMessage == message) {
@@ -36,16 +132,30 @@ class _ShopDetailScreenState extends ConsumerState<ShopDetailScreen> {
   }
 
   Future<void> _refreshShopData() async {
+    _logDebug('Refreshing shop data for shopId=${widget.shopId}');
     ref.invalidate(shopProvider(widget.shopId));
     ref.invalidate(shopProductsProvider(widget.shopId));
-    await Future.wait<void>([
-      ref.read(shopProvider(widget.shopId).future).then((_) {}),
-      ref.read(shopProductsProvider(widget.shopId).future).then((_) {}),
-    ]);
+    final shopFuture = ref
+        .read(shopProvider(widget.shopId).future)
+        .timeout(const Duration(seconds: 8))
+        .catchError((error, stackTrace) {
+          _logDebug('Shop refresh failed: $error');
+          return null;
+        });
+    final productsFuture = ref
+        .read(shopProductsProvider(widget.shopId).future)
+        .timeout(const Duration(seconds: 8))
+        .catchError((error, stackTrace) {
+          _logDebug('Products refresh failed: $error');
+          return <Product>[];
+        });
+    await Future.wait<dynamic>([shopFuture, productsFuture]);
   }
 
   @override
   void dispose() {
+    _shopProductsSubscription?.close();
+    _shopSubscription?.close();
     _searchController.dispose();
     super.dispose();
   }
@@ -96,45 +206,6 @@ class _ShopDetailScreenState extends ConsumerState<ShopDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final cart = ref.watch(cartControllerProvider);
-    ref.listen<AsyncValue<List<Product>>>(shopProductsProvider(widget.shopId), (
-      previous,
-      next,
-    ) {
-      next.whenOrNull(
-        error: (error, stackTrace) => _showFeedback(
-          'Could not load shop items. ${error.toString()}',
-          isError: true,
-        ),
-        data: (products) {
-          final hasCategories =
-              (widget.initialShop?.categories ?? const <String>[]).isNotEmpty;
-          if (products.isEmpty && hasCategories) {
-            _showFeedback(
-              'This shop has categories but no items were returned. Pull to refresh or check Firestore data.',
-              isError: true,
-            );
-          }
-        },
-      );
-    });
-    if (widget.initialShop == null) {
-      ref.listen<AsyncValue<Shop?>>(shopProvider(widget.shopId), (
-        previous,
-        next,
-      ) {
-        next.whenOrNull(
-          error: (error, stackTrace) => _showFeedback(
-            'Could not load shop details. ${error.toString()}',
-            isError: true,
-          ),
-          data: (shop) {
-            if (shop == null) {
-              _showFeedback('Shop details could not be found.', isError: true);
-            }
-          },
-        );
-      });
-    }
     final productsAsync = ref.watch(shopProductsProvider(widget.shopId));
     final fallbackShopAsync = widget.initialShop == null
         ? ref.watch(shopProvider(widget.shopId))
@@ -229,165 +300,194 @@ class _ShopDetailContent extends StatelessWidget {
   final Future<void> Function(String productId, int quantity) onDecrease;
   final Future<void> Function() onRetry;
 
+  void _logDebug(String message) {
+    if (kDebugMode) {
+      debugPrint('[ShopDetailContent] $message');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(18),
-      children: [
-        MarketplaceImage(
-          imageUrl: shop.coverImageUrl ?? shop.imageUrl,
-          height: 220,
-          borderRadius: BorderRadius.circular(28),
-          placeholderIcon: Icons.storefront_rounded,
-        ),
-        const SizedBox(height: 16),
-        Text(
-          shop.name,
-          style: Theme.of(
-            context,
-          ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
-        ),
-        const SizedBox(height: 8),
-        Text(shop.description),
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Chip(
-              label: Text(shop.locality),
-              avatar: const Icon(Icons.pin_drop_outlined),
+            MarketplaceImage(
+              imageUrl: shop.coverImageUrl ?? shop.imageUrl,
+              height: 220,
+              borderRadius: BorderRadius.circular(28),
+              placeholderIcon: Icons.storefront_rounded,
             ),
-            Chip(
-              label: Text(shop.deliveryEstimate),
-              avatar: const Icon(Icons.timer_outlined),
+            const SizedBox(height: 16),
+            Text(
+              shop.name,
+              style: Theme.of(
+                context,
+              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
             ),
-            if ((shop.openingHours ?? '').isNotEmpty)
-              Chip(
-                label: Text(shop.openingHours!),
-                avatar: const Icon(Icons.storefront_outlined),
-              ),
-          ],
-        ),
-        const SizedBox(height: 18),
-        TextField(
-          controller: searchController,
-          onChanged: (_) => onSearchChanged(),
-          decoration: const InputDecoration(
-            hintText: 'Search within shop',
-            prefixIcon: Icon(Icons.search_rounded),
-          ),
-        ),
-        const SizedBox(height: 18),
-        productsAsync.when(
-          data: (products) {
-            final filteredProducts = products.where((product) {
-              final query = searchController.text.trim().toLowerCase();
-              final matchesQuery =
-                  query.isEmpty ||
-                  product.name.toLowerCase().contains(query) ||
-                  product.description.toLowerCase().contains(query);
-              final matchesCategory =
-                  selectedCategory == 'All' ||
-                  product.category.label == selectedCategory;
-              return matchesQuery && matchesCategory;
-            }).toList();
-            final categories = [
-              'All',
-              ...products.map((product) => product.category.label).toSet(),
-            ];
-
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            const SizedBox(height: 8),
+            Text(shop.description),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
               children: [
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: categories
-                        .map(
-                          (label) => Padding(
-                            padding: const EdgeInsets.only(right: 8),
-                            child: ChoiceChip(
-                              label: Text(label),
-                              selected: selectedCategory == label,
-                              onSelected: (_) => onCategoryChanged(label),
-                            ),
-                          ),
-                        )
-                        .toList(),
-                  ),
+                Chip(
+                  label: Text(shop.locality),
+                  avatar: const Icon(Icons.pin_drop_outlined),
                 ),
-                const SizedBox(height: 18),
-                if (products.isEmpty)
-                  EmptyStateCard(
-                    title: 'No products listed yet',
-                    subtitle:
-                        'This shop is live, but no items were returned. Pull to refresh or try again in a moment.',
-                    icon: Icons.inventory_2_outlined,
-                    action: OutlinedButton.icon(
-                      onPressed: onRetry,
-                      icon: const Icon(Icons.refresh_rounded),
-                      label: const Text('Retry'),
-                    ),
-                  )
-                else if (filteredProducts.isEmpty)
-                  const EmptyStateCard(
-                    title: 'No products match this search',
-                    subtitle:
-                        'Try another category or search term to explore more items.',
-                    icon: Icons.search_off_rounded,
-                  )
-                else
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '${filteredProducts.length} item${filteredProducts.length == 1 ? '' : 's'} available',
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      ...filteredProducts.map(
-                        (product) => Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: ProductCard(
-                            product: product,
-                            quantity: cart.quantityFor(product.id),
-                            onAdd: () => onAddProduct(product, shop.name),
-                            onIncrease: () => onAddProduct(product, shop.name),
-                            onDecrease: () => onDecrease(
-                              product.id,
-                              cart.quantityFor(product.id),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
+                Chip(
+                  label: Text(shop.deliveryEstimate),
+                  avatar: const Icon(Icons.timer_outlined),
+                ),
+                if ((shop.openingHours ?? '').isNotEmpty)
+                  Chip(
+                    label: Text(shop.openingHours!),
+                    avatar: const Icon(Icons.storefront_outlined),
                   ),
               ],
-            );
-          },
-          loading: () => const Padding(
-            padding: EdgeInsets.symmetric(vertical: 40),
-            child: Center(child: CircularProgressIndicator()),
-          ),
-          error: (error, stackTrace) => Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: EmptyStateCard(
-              title: 'Unable to load products',
-              subtitle: error.toString(),
-              icon: Icons.error_outline_rounded,
-              action: OutlinedButton.icon(
-                onPressed: onRetry,
-                icon: const Icon(Icons.refresh_rounded),
-                label: const Text('Retry'),
+            ),
+            const SizedBox(height: 18),
+            TextField(
+              controller: searchController,
+              onChanged: (_) => onSearchChanged(),
+              decoration: const InputDecoration(
+                hintText: 'Search within shop',
+                prefixIcon: Icon(Icons.search_rounded),
               ),
             ),
-          ),
+            const SizedBox(height: 18),
+            productsAsync.when(
+              data: (products) {
+                final categories = [
+                  'All',
+                  ...products.map((product) => product.category.label).toSet(),
+                ];
+                final effectiveCategory = categories.contains(selectedCategory)
+                    ? selectedCategory
+                    : 'All';
+                final query = searchController.text.trim().toLowerCase();
+                final filteredProducts = products.where((product) {
+                  final matchesQuery =
+                      query.isEmpty ||
+                      product.name.toLowerCase().contains(query) ||
+                      product.description.toLowerCase().contains(query);
+                  final matchesCategory =
+                      effectiveCategory == 'All' ||
+                      product.category.label == effectiveCategory;
+                  return matchesQuery && matchesCategory;
+                }).toList();
+                _logDebug(
+                  'shopId=${shop.id}, selectedCategory=$selectedCategory, effectiveCategory=$effectiveCategory, total=${products.length}, filtered=${filteredProducts.length}',
+                );
+                if (kDebugMode) {
+                  for (final product in filteredProducts) {
+                    _logDebug(
+                      'Rendering product card id=${product.id}, name="${product.name}", price=${product.price}, discount=${product.discountPercent}, imageUrl="${product.imageUrl}"',
+                    );
+                  }
+                }
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: categories
+                            .map(
+                              (label) => Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: ChoiceChip(
+                                  label: Text(label),
+                                  selected: effectiveCategory == label,
+                                  onSelected: (_) => onCategoryChanged(label),
+                                ),
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    if (products.isEmpty)
+                      EmptyStateCard(
+                        title: 'No products listed yet',
+                        subtitle:
+                            'This shop is live, but no items were returned. Pull to refresh or try again in a moment.',
+                        icon: Icons.inventory_2_outlined,
+                        action: OutlinedButton.icon(
+                          onPressed: onRetry,
+                          icon: const Icon(Icons.refresh_rounded),
+                          label: const Text('Retry'),
+                        ),
+                      )
+                    else if (filteredProducts.isEmpty)
+                      const EmptyStateCard(
+                        title: 'No products match this search',
+                        subtitle:
+                            'Try another category or search term to explore more items.',
+                        icon: Icons.search_off_rounded,
+                      )
+                    else
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${filteredProducts.length} item${filteredProducts.length == 1 ? '' : 's'} available',
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
+                          const SizedBox(height: 12),
+                          ...filteredProducts.map(
+                            (product) => Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: ProductCard(
+                                product: product,
+                                quantity: cart.quantityFor(product.id),
+                                onAdd: () => onAddProduct(product, shop.name),
+                                onIncrease: () =>
+                                    onAddProduct(product, shop.name),
+                                onDecrease: () => onDecrease(
+                                  product.id,
+                                  cart.quantityFor(product.id),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                  ],
+                );
+              },
+              loading: () => const Padding(
+                padding: EdgeInsets.symmetric(vertical: 40),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+              error: (error, stackTrace) => Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: EmptyStateCard(
+                  title: 'Unable to load products',
+                  subtitle: error.toString(),
+                  icon: Icons.error_outline_rounded,
+                  action: OutlinedButton.icon(
+                    onPressed: onRetry,
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('Retry'),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }

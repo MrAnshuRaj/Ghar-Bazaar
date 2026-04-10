@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:ghar_bazaar/data/models/enums.dart';
 
 class Product {
@@ -91,27 +92,110 @@ class Product {
   }
 
   factory Product.fromMap(Map<String, dynamic> map) {
+    final discountRaw =
+        _asDouble(map['discountPercent']) ?? _asDouble(map['discount']) ?? 0;
+    final createdAt = _asDateTime(map['createdAt']) ?? DateTime.now();
     return Product(
-      id: map['id'] as String? ?? '',
-      vendorId: map['vendorId'] as String? ?? '',
-      shopId: map['shopId'] as String? ?? '',
-      name: map['name'] as String? ?? '',
-      description: map['description'] as String? ?? '',
-      imageUrl: map['imageUrl'] as String? ?? '',
-      category: productCategoryFromValue(map['category'] as String?),
-      price: (map['price'] as num?)?.toDouble() ?? 0,
-      discountPercent:
-          (map['discountPercent'] as num?)?.toDouble() ??
-          (map['discount'] as num?)?.toDouble() ??
-          0,
-      stock: (map['stock'] as num?)?.toInt() ?? 0,
-      unit: map['unit'] as String? ?? '',
-      locality: map['locality'] as String? ?? '',
-      isAvailable: map['isAvailable'] as bool? ?? true,
-      createdAt: DateTime.fromMillisecondsSinceEpoch(
-        (map['createdAt'] as num?)?.toInt() ??
-            DateTime.now().millisecondsSinceEpoch,
-      ),
+      id: _asString(map['id']),
+      vendorId: _asString(map['vendorId']),
+      shopId: _asString(map['shopId']),
+      name: _asString(map['name']),
+      description: _asString(map['description']),
+      imageUrl: _asString(map['imageUrl']),
+      category: productCategoryFromValue(_asStringOrNull(map['category'])),
+      price: _asDouble(map['price']) ?? 0,
+      discountPercent: discountRaw.isFinite ? discountRaw : 0,
+      stock: _asInt(map['stock']) ?? 0,
+      unit: _asString(map['unit']),
+      locality: _asString(map['locality']),
+      isAvailable: _asBool(map['isAvailable']) ?? true,
+      createdAt: createdAt,
     );
   }
+}
+
+String _asString(Object? value) {
+  if (value == null) {
+    return '';
+  }
+  if (value is String) {
+    return value.trim();
+  }
+  return value.toString().trim();
+}
+
+String? _asStringOrNull(Object? value) {
+  final parsed = _asString(value);
+  return parsed.isEmpty ? null : parsed;
+}
+
+double? _asDouble(Object? value) {
+  if (value == null) {
+    return null;
+  }
+  if (value is num) {
+    return value.toDouble();
+  }
+  if (value is String) {
+    return double.tryParse(value.trim());
+  }
+  return null;
+}
+
+int? _asInt(Object? value) {
+  if (value == null) {
+    return null;
+  }
+  if (value is num) {
+    return value.toInt();
+  }
+  if (value is String) {
+    return int.tryParse(value.trim()) ?? double.tryParse(value.trim())?.toInt();
+  }
+  return null;
+}
+
+bool? _asBool(Object? value) {
+  if (value == null) {
+    return null;
+  }
+  if (value is bool) {
+    return value;
+  }
+  if (value is num) {
+    return value != 0;
+  }
+  if (value is String) {
+    final normalized = value.trim().toLowerCase();
+    if (normalized == 'true' || normalized == '1' || normalized == 'yes') {
+      return true;
+    }
+    if (normalized == 'false' || normalized == '0' || normalized == 'no') {
+      return false;
+    }
+  }
+  return null;
+}
+
+DateTime? _asDateTime(Object? value) {
+  if (value == null) {
+    return null;
+  }
+  if (value is DateTime) {
+    return value;
+  }
+  if (value is num) {
+    return DateTime.fromMillisecondsSinceEpoch(value.toInt());
+  }
+  if (value is String) {
+    final epoch = int.tryParse(value.trim());
+    if (epoch != null) {
+      return DateTime.fromMillisecondsSinceEpoch(epoch);
+    }
+    return DateTime.tryParse(value.trim());
+  }
+  if (value is Timestamp) {
+    return value.toDate();
+  }
+  return null;
 }
