@@ -9,10 +9,15 @@ import 'package:path_provider/path_provider.dart';
 import 'package:ghar_bazaar/core/constants/app_secrets.dart';
 
 class ImageUploadService {
-  ImageUploadService({ImagePicker? imagePicker, http.Client? client})
-    : _imagePicker = imagePicker ?? ImagePicker(),
-      _client = client ?? http.Client();
+  ImageUploadService({
+    ImagePicker? imagePicker,
+    http.Client? client,
+    required bool allowLocalFallback,
+  }) : _allowLocalFallback = allowLocalFallback,
+       _imagePicker = imagePicker ?? ImagePicker(),
+       _client = client ?? http.Client();
 
+  final bool _allowLocalFallback;
   final ImagePicker _imagePicker;
   final http.Client _client;
 
@@ -36,14 +41,20 @@ class ImageUploadService {
     }
     if (!hasImgbbApiKey) {
       if (kDebugMode) {
-        debugPrint('[config] $imgbbApiKeySetupMessage Using local image path.');
+        debugPrint('[config] $imgbbApiKeySetupMessage');
       }
-      return _persistImageLocally(file);
+      if (_allowLocalFallback) {
+        return _persistImageLocally(file);
+      }
+      throw const ImageUploadException(imgbbApiKeyRequiredForSharedModeMessage);
     }
 
     try {
       return await _uploadToImgbb(file);
     } on ImageUploadException catch (error) {
+      if (!_allowLocalFallback) {
+        rethrow;
+      }
       if (kDebugMode) {
         debugPrint(
           '[image-upload] Remote upload failed: $error. Falling back to local image path.',

@@ -52,7 +52,9 @@ final marketplaceRepositoryProvider = Provider<MarketplaceRepository>((ref) {
 });
 
 final imageUploadServiceProvider = Provider<ImageUploadService>((ref) {
-  final service = ImageUploadService();
+  final service = ImageUploadService(
+    allowLocalFallback: !ref.watch(firebaseEnabledProvider),
+  );
   ref.onDispose(service.dispose);
   return service;
 });
