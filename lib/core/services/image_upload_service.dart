@@ -39,38 +39,41 @@ class ImageUploadService {
     if (!await file.exists()) {
       throw const ImageUploadException('Selected image could not be found.');
     }
-    if (!hasImgbbApiKey) {
-      if (kDebugMode) {
-        debugPrint('[config] $imgbbApiKeySetupMessage');
-      }
+    final apiKey = validatedImgbbApiKey(logIfMissing: true);
+    if (apiKey == null) {
       if (_allowLocalFallback) {
+        if (kDebugMode) {
+          debugPrint(
+            '[ImgBB] Missing API key. Using local image persistence fallback.',
+          );
+        }
         return _persistImageLocally(file);
       }
       throw const ImageUploadException(imgbbApiKeyRequiredForSharedModeMessage);
     }
 
     try {
-      return await _uploadToImgbb(file);
+      return await _uploadToImgbb(file, apiKey);
     } on ImageUploadException catch (error) {
       if (!_allowLocalFallback) {
         rethrow;
       }
       if (kDebugMode) {
         debugPrint(
-          '[image-upload] Remote upload failed: $error. Falling back to local image path.',
+          '[ImgBB] Remote upload failed: $error. Falling back to local image path.',
         );
       }
       return _persistImageLocally(file);
     }
   }
 
-  Future<String> _uploadToImgbb(File file) async {
+  Future<String> _uploadToImgbb(File file, String apiKey) async {
     final bytes = await file.readAsBytes();
     late final http.Response response;
     try {
       response = await _client
           .post(
-            Uri.parse('https://api.imgbb.com/1/upload?key=$imgbbApiKey'),
+            Uri.parse('https://api.imgbb.com/1/upload?key=$apiKey'),
             body: {'image': base64Encode(bytes)},
           )
           .timeout(const Duration(seconds: 25));

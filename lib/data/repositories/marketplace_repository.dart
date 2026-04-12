@@ -49,6 +49,7 @@ class MarketplaceRepository {
       _dataSource.watchCustomerOrders(customerId);
   Stream<List<OrderModel>> watchVendorOrders(String vendorId) =>
       _dataSource.watchVendorOrders(vendorId);
+  Future<OrderModel?> getOrder(String orderId) => _dataSource.getOrder(orderId);
   Future<void> createOrder(OrderModel order) => _dataSource.createOrder(order);
   Future<void> updateOrderStatus(String orderId, OrderStatus status) =>
       _dataSource.updateOrderStatus(orderId, status);

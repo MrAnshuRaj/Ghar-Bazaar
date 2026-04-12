@@ -94,6 +94,7 @@ class _CustomerProfileFormScreenState
     final existingProfile = ref.watch(customerProfileProvider).asData?.value;
     final currentUser = ref.watch(currentAppUserProvider).asData?.value;
     final session = ref.read(authRepositoryProvider).currentSession;
+    final isEditing = existingProfile != null;
     if (!_initialized) {
       if (existingProfile != null) {
         _nameController.text = existingProfile.fullName;
@@ -106,7 +107,7 @@ class _CustomerProfileFormScreenState
         final fallbackName =
             currentUser?.name ??
             session?.displayName ??
-            (session == null ? null : session.email.split('@').first);
+            session?.email.split('@').first;
         final fallbackPhone = currentUser?.phone;
         if ((fallbackName ?? '').isNotEmpty ||
             (fallbackPhone ?? '').isNotEmpty) {
@@ -117,7 +118,9 @@ class _CustomerProfileFormScreenState
       }
     }
     return Scaffold(
-      appBar: AppBar(title: const Text('Create customer profile')),
+      appBar: AppBar(
+        title: Text(isEditing ? 'Edit customer profile' : 'Create customer profile'),
+      ),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
@@ -133,7 +136,9 @@ class _CustomerProfileFormScreenState
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Tell us where to deliver',
+                          isEditing
+                              ? 'Update your delivery details'
+                              : 'Tell us where to deliver',
                           style: Theme.of(context).textTheme.headlineSmall
                               ?.copyWith(fontWeight: FontWeight.w900),
                         ),
@@ -163,7 +168,7 @@ class _CustomerProfileFormScreenState
                         const SizedBox(height: 14),
                         localities.when(
                           data: (items) => DropdownButtonFormField<String>(
-                            value: _locality,
+                            initialValue: _locality,
                             decoration: const InputDecoration(
                               labelText: 'Locality',
                             ),
@@ -182,7 +187,7 @@ class _CustomerProfileFormScreenState
                                 : null,
                           ),
                           loading: () => const LinearProgressIndicator(),
-                          error: (_, __) =>
+                          error: (_, _) =>
                               const Text('Unable to load localities'),
                         ),
                         const SizedBox(height: 14),
@@ -204,7 +209,7 @@ class _CustomerProfileFormScreenState
                         ),
                         const SizedBox(height: 20),
                         AppPrimaryButton(
-                          label: 'Save & Continue',
+                          label: isEditing ? 'Save Changes' : 'Save & Continue',
                           icon: Icons.check_circle_outline_rounded,
                           onPressed: _submit,
                           isLoading: _submitting,

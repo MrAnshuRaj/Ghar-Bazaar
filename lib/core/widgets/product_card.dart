@@ -70,8 +70,6 @@ class ProductCard extends StatelessWidget {
               : FilledButton(
                   onPressed: onAdd,
                   style: FilledButton.styleFrom(
-                    // Avoid inheriting infinite-width button constraints
-                    // from global FilledButtonTheme inside tight Rows.
                     minimumSize: const Size(0, 40),
                     padding: const EdgeInsets.symmetric(
                       horizontal: 14,

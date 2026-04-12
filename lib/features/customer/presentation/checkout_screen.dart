@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:ghar_bazaar/core/utils/app_feedback.dart';
 import 'package:ghar_bazaar/core/utils/formatters.dart';
 import 'package:ghar_bazaar/core/widgets/async_value_widget.dart';
 import 'package:ghar_bazaar/core/widgets/app_primary_button.dart';
@@ -23,81 +25,127 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
   final _uuid = const Uuid();
 
   Future<void> _placeOrder() async {
+    if (_submitting) {
+      return;
+    }
     final cart = ref.read(cartControllerProvider);
     final session = ref.read(authRepositoryProvider).currentSession;
     if (cart.isEmpty || session == null) {
+      if (mounted) {
+        showAppSnackBar(
+          context,
+          'Your session or cart is no longer available. Please try again.',
+          isError: true,
+        );
+      }
       return;
     }
     final customerProfile = await ref.read(customerProfileProvider.future);
     if (customerProfile == null) {
+      if (mounted) {
+        showAppSnackBar(
+          context,
+          'Please complete your profile before placing the order.',
+          isError: true,
+        );
+      }
       return;
     }
     if (!mounted) {
       return;
     }
     setState(() => _submitting = true);
-    if (_paymentMethod == PaymentMethod.upi) {
-      await showModalBottomSheet<void>(
-        context: context,
-        isScrollControlled: true,
-        builder: (context) => Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.qr_code_2_rounded, size: 80),
-              const SizedBox(height: 16),
-              const Text('Sample UPI payment'),
-              const SizedBox(height: 8),
-              const Text(
-                'Pay to gharbazaar@upi or use any UPI app to continue.',
-              ),
-              const SizedBox(height: 20),
-              FilledButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Pay Now'),
-              ),
-            ],
+    try {
+      if (kDebugMode) {
+        debugPrint(
+          '[CheckoutScreen] placing order for shop=${cart.shopId}, vendor=${cart.vendorId}, payment=${_paymentMethod.value}',
+        );
+      }
+      if (_paymentMethod != PaymentMethod.cashOnDelivery) {
+        await showModalBottomSheet<void>(
+          context: context,
+          isScrollControlled: true,
+          isDismissible: false,
+          enableDrag: false,
+          builder: (context) => Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.qr_code_2_rounded, size: 80),
+                const SizedBox(height: 16),
+                Text('Processing ${_paymentMethod.label}'),
+                const SizedBox(height: 8),
+                const Text(
+                  'Payment assumed successful for this demo checkout flow.',
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 20),
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Confirm Payment'),
+                ),
+              ],
+            ),
           ),
-        ),
-      );
-    } else {
-      await Future<void>.delayed(const Duration(milliseconds: 800));
-    }
+        );
+      } else {
+        await Future<void>.delayed(const Duration(milliseconds: 600));
+      }
 
-    final orderId = _uuid.v4();
-    final order = OrderModel(
-      id: orderId,
-      customerId: session.uid,
-      vendorId: cart.vendorId ?? '',
-      shopId: cart.shopId ?? '',
-      shopName: cart.shopName ?? 'Your Shop',
-      customerName: customerProfile.fullName,
-      customerPhone: customerProfile.phoneNumber,
-      locality: customerProfile.locality,
-      deliveryAddress: Address(
+      final orderId = _uuid.v4();
+      final order = OrderModel(
+        id: orderId,
+        customerId: session.uid,
+        vendorId: cart.vendorId ?? '',
+        shopId: cart.shopId ?? '',
+        shopName: cart.shopName ?? 'Your Shop',
+        customerName: customerProfile.fullName,
+        customerPhone: customerProfile.phoneNumber,
         locality: customerProfile.locality,
-        line1: customerProfile.addressLine,
-        landmark: customerProfile.landmark,
-      ),
-      items: cart.items,
-      subtotal: cart.subtotal,
-      discount: cart.savings,
-      deliveryFee: cart.deliveryFee,
-      total: cart.total,
-      paymentMethod: _paymentMethod,
-      status: OrderStatus.placed,
-      createdAt: DateTime.now(),
-    );
-    await ref.read(marketplaceRepositoryProvider).createOrder(order);
-    await ref.read(cartControllerProvider.notifier).clear();
-    ref.invalidate(customerOrdersProvider);
-    ref.invalidate(vendorOrdersProvider);
-    if (!mounted) {
-      return;
+        deliveryAddress: Address(
+          locality: customerProfile.locality,
+          line1: customerProfile.addressLine,
+          landmark: customerProfile.landmark,
+        ),
+        items: cart.items,
+        subtotal: cart.subtotal,
+        discount: cart.savings,
+        deliveryFee: cart.deliveryFee,
+        total: cart.total,
+        paymentMethod: _paymentMethod,
+        status: OrderStatus.placed,
+        createdAt: DateTime.now(),
+      );
+      await ref
+          .read(marketplaceRepositoryProvider)
+          .createOrder(order)
+          .timeout(const Duration(seconds: 12));
+      await ref.read(cartControllerProvider.notifier).clear();
+      ref.invalidate(customerOrdersProvider);
+      ref.invalidate(vendorOrdersProvider);
+      ref.invalidate(orderProvider(orderId));
+      if (!mounted) {
+        return;
+      }
+      context.go('/customer/order-success/$orderId');
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      if (kDebugMode) {
+        debugPrint('[CheckoutScreen] place order failed: $error');
+      }
+      showAppSnackBar(
+        context,
+        'We could not place your order right now. Please try again.',
+        isError: true,
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _submitting = false);
+      }
     }
-    setState(() => _submitting = false);
-    context.go('/customer/order-success/$orderId');
   }
 
   @override
@@ -152,13 +200,22 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
                                   ?.copyWith(fontWeight: FontWeight.w800),
                             ),
                             const SizedBox(height: 10),
-                            ...PaymentMethod.values.map(
-                              (method) => RadioListTile<PaymentMethod>(
-                                value: method,
-                                groupValue: _paymentMethod,
-                                onChanged: (value) =>
-                                    setState(() => _paymentMethod = value!),
-                                title: Text(method.label),
+                            RadioGroup<PaymentMethod>(
+                              groupValue: _paymentMethod,
+                              onChanged: (value) {
+                                if (value != null) {
+                                  setState(() => _paymentMethod = value);
+                                }
+                              },
+                              child: Column(
+                                children: PaymentMethod.values
+                                    .map(
+                                      (method) => RadioListTile<PaymentMethod>(
+                                        value: method,
+                                        title: Text(method.label),
+                                      ),
+                                    )
+                                    .toList(),
                               ),
                             ),
                           ],

@@ -42,7 +42,10 @@ final localDatabaseProvider = Provider<LocalDatabase>((ref) {
 
 final marketplaceDataSourceProvider = Provider<MarketplaceDataSource>((ref) {
   if (ref.watch(firebaseEnabledProvider)) {
-    return FirebaseMarketplaceDataSource(FirebaseFirestore.instance);
+    return FirebaseMarketplaceDataSource(
+      FirebaseFirestore.instance,
+      offlineCache: ref.watch(localDatabaseProvider),
+    );
   }
   return LocalMarketplaceDataSource(ref.watch(localDatabaseProvider));
 });
@@ -206,6 +209,13 @@ final vendorOrdersProvider = StreamProvider<List<OrderModel>>((ref) {
   return ref
       .watch(marketplaceRepositoryProvider)
       .watchVendorOrders(session.uid);
+});
+
+final orderProvider = FutureProvider.family<OrderModel?, String>((
+  ref,
+  orderId,
+) async {
+  return ref.watch(marketplaceRepositoryProvider).getOrder(orderId);
 });
 
 final authControllerProvider = AsyncNotifierProvider<AuthController, void>(

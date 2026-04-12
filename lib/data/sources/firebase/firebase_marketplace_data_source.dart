@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:ghar_bazaar/core/constants/app_constants.dart';
@@ -9,12 +11,15 @@ import 'package:ghar_bazaar/data/models/order_model.dart';
 import 'package:ghar_bazaar/data/models/product.dart';
 import 'package:ghar_bazaar/data/models/shop.dart';
 import 'package:ghar_bazaar/data/models/vendor_profile.dart';
+import 'package:ghar_bazaar/data/sources/local/local_database.dart';
 import 'package:ghar_bazaar/data/sources/marketplace_data_source.dart';
 
 class FirebaseMarketplaceDataSource implements MarketplaceDataSource {
-  FirebaseMarketplaceDataSource(this._firestore);
+  FirebaseMarketplaceDataSource(this._firestore, {LocalDatabase? offlineCache})
+    : _offlineCache = offlineCache;
 
   final FirebaseFirestore _firestore;
+  final LocalDatabase? _offlineCache;
 
   CollectionReference<Map<String, dynamic>> get _users =>
       _firestore.collection('users');
@@ -71,6 +76,70 @@ class FirebaseMarketplaceDataSource implements MarketplaceDataSource {
     return Duration(seconds: seconds);
   }
 
+  bool _isOfflineError(Object error) {
+    return error is FirebaseException && error.code == 'unavailable';
+  }
+
+  void _logOffline(String operation, Object error) {
+    _logDebug('Firestore offline during $operation: $error');
+  }
+
+  bool _shouldFallbackOrderStorage(Object error) {
+    return error is FirebaseException || error is TimeoutException;
+  }
+
+  void _logOrderFallback(String operation, Object error) {
+    _logDebug('Falling back to offline order cache during $operation: $error');
+  }
+
+  List<Map<String, dynamic>> _collection(
+    Map<String, dynamic> data,
+    String key,
+  ) {
+    return (data[key] as List? ?? const [])
+        .map((item) => Map<String, dynamic>.from(item as Map))
+        .toList();
+  }
+
+  Future<List<OrderModel>> _readOfflineOrders() async {
+    if (_offlineCache == null) {
+      return const <OrderModel>[];
+    }
+    final snapshot = await _offlineCache.read();
+    return _collection(snapshot, 'orders').map(OrderModel.fromMap).toList();
+  }
+
+  Future<void> _saveOfflineOrder(OrderModel order) async {
+    if (_offlineCache == null) {
+      return;
+    }
+    final snapshot = await _offlineCache.read();
+    final orders = _collection(snapshot, 'orders');
+    final index = orders.indexWhere((item) => item['id'] == order.id);
+    if (index == -1) {
+      orders.add(order.toMap());
+    } else {
+      orders[index] = order.toMap();
+    }
+    snapshot['orders'] = orders;
+    await _offlineCache.write(snapshot);
+  }
+
+  List<OrderModel> _mergeOrders(
+    List<OrderModel> primary,
+    List<OrderModel> secondary,
+  ) {
+    final merged = <String, OrderModel>{};
+    for (final order in secondary) {
+      merged[order.id] = order;
+    }
+    for (final order in primary) {
+      merged[order.id] = order;
+    }
+    return merged.values.toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+  }
+
   Product? _parseProductDoc(
     QueryDocumentSnapshot<Map<String, dynamic>> doc, {
     required String context,
@@ -108,11 +177,19 @@ class FirebaseMarketplaceDataSource implements MarketplaceDataSource {
 
   @override
   Future<AppUser?> getUser(String uid) async {
-    final snapshot = await _users.doc(uid).get();
-    if (!snapshot.exists || snapshot.data() == null) {
-      return null;
+    try {
+      final snapshot = await _users.doc(uid).get();
+      if (!snapshot.exists || snapshot.data() == null) {
+        return null;
+      }
+      return AppUser.fromMap(snapshot.data()!);
+    } catch (error) {
+      if (_isOfflineError(error)) {
+        _logOffline('getUser($uid)', error);
+        return null;
+      }
+      throw _dataException(error, 'Unable to load your account right now.');
     }
-    return AppUser.fromMap(snapshot.data()!);
   }
 
   @override
@@ -122,11 +199,22 @@ class FirebaseMarketplaceDataSource implements MarketplaceDataSource {
 
   @override
   Future<CustomerProfile?> getCustomerProfile(String uid) async {
-    final snapshot = await _customerProfiles.doc(uid).get();
-    if (!snapshot.exists || snapshot.data() == null) {
-      return null;
+    try {
+      final snapshot = await _customerProfiles.doc(uid).get();
+      if (!snapshot.exists || snapshot.data() == null) {
+        return null;
+      }
+      return CustomerProfile.fromMap(snapshot.data()!);
+    } catch (error) {
+      if (_isOfflineError(error)) {
+        _logOffline('getCustomerProfile($uid)', error);
+        return null;
+      }
+      throw _dataException(
+        error,
+        'Unable to load your customer profile right now.',
+      );
     }
-    return CustomerProfile.fromMap(snapshot.data()!);
   }
 
   @override
@@ -138,11 +226,22 @@ class FirebaseMarketplaceDataSource implements MarketplaceDataSource {
 
   @override
   Future<VendorProfile?> getVendorProfile(String uid) async {
-    final snapshot = await _vendorProfiles.doc(uid).get();
-    if (!snapshot.exists || snapshot.data() == null) {
-      return null;
+    try {
+      final snapshot = await _vendorProfiles.doc(uid).get();
+      if (!snapshot.exists || snapshot.data() == null) {
+        return null;
+      }
+      return VendorProfile.fromMap(snapshot.data()!);
+    } catch (error) {
+      if (_isOfflineError(error)) {
+        _logOffline('getVendorProfile($uid)', error);
+        return null;
+      }
+      throw _dataException(
+        error,
+        'Unable to load your vendor profile right now.',
+      );
     }
-    return VendorProfile.fromMap(snapshot.data()!);
   }
 
   @override
@@ -421,35 +520,161 @@ class FirebaseMarketplaceDataSource implements MarketplaceDataSource {
 
   @override
   Stream<List<OrderModel>> watchCustomerOrders(String customerId) {
-    return _orders
-        .where('customerId', isEqualTo: customerId)
-        .snapshots()
-        .map(
-          (snapshot) =>
-              snapshot.docs
-                  .map((doc) => OrderModel.fromMap(doc.data()))
-                  .toList()
-                ..sort((a, b) => b.createdAt.compareTo(a.createdAt)),
-        );
+    return (() async* {
+      _logDebug('watchCustomerOrders subscribed customerId=$customerId');
+      try {
+        var attempt = 0;
+        while (true) {
+          try {
+            await for (final snapshot
+                in _orders.where('customerId', isEqualTo: customerId).snapshots()) {
+              final remoteOrders =
+                  snapshot.docs
+                      .map((doc) => OrderModel.fromMap(doc.data()))
+                      .toList();
+              final offlineOrders = await _readOfflineOrders();
+              final orders = _mergeOrders(
+                remoteOrders,
+                offlineOrders
+                    .where((order) => order.customerId == customerId)
+                    .toList(),
+              );
+              attempt = 0;
+              yield orders;
+            }
+            return;
+          } catch (error) {
+            if (_isTransientFirestoreError(error)) {
+              attempt += 1;
+              final delay = _retryDelay(attempt);
+              _logOffline(
+                'watchCustomerOrders($customerId), retry in ${delay.inSeconds}s',
+                error,
+              );
+              final offlineOrders = await _readOfflineOrders();
+              yield offlineOrders
+                .where((order) => order.customerId == customerId)
+                .toList()
+                ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+              await Future<void>.delayed(delay);
+              continue;
+            }
+            if (_shouldFallbackOrderStorage(error)) {
+              _logOrderFallback('watchCustomerOrders($customerId)', error);
+              final offlineOrders = await _readOfflineOrders();
+              yield offlineOrders
+                .where((order) => order.customerId == customerId)
+                .toList()
+                ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+              return;
+            }
+            throw _dataException(
+              error,
+              'Unable to load your orders right now.',
+            );
+          }
+        }
+      } finally {
+        _logDebug('watchCustomerOrders unsubscribed customerId=$customerId');
+      }
+    })();
   }
 
   @override
   Stream<List<OrderModel>> watchVendorOrders(String vendorId) {
-    return _orders
-        .where('vendorId', isEqualTo: vendorId)
-        .snapshots()
-        .map(
-          (snapshot) =>
-              snapshot.docs
-                  .map((doc) => OrderModel.fromMap(doc.data()))
-                  .toList()
-                ..sort((a, b) => b.createdAt.compareTo(a.createdAt)),
-        );
+    return (() async* {
+      _logDebug('watchVendorOrders subscribed vendorId=$vendorId');
+      try {
+        var attempt = 0;
+        while (true) {
+          try {
+            await for (final snapshot
+                in _orders.where('vendorId', isEqualTo: vendorId).snapshots()) {
+              final remoteOrders =
+                  snapshot.docs
+                      .map((doc) => OrderModel.fromMap(doc.data()))
+                      .toList();
+              final offlineOrders = await _readOfflineOrders();
+              final orders = _mergeOrders(
+                remoteOrders,
+                offlineOrders
+                    .where((order) => order.vendorId == vendorId)
+                    .toList(),
+              );
+              attempt = 0;
+              yield orders;
+            }
+            return;
+          } catch (error) {
+            if (_isTransientFirestoreError(error)) {
+              attempt += 1;
+              final delay = _retryDelay(attempt);
+              _logOffline(
+                'watchVendorOrders($vendorId), retry in ${delay.inSeconds}s',
+                error,
+              );
+              final offlineOrders = await _readOfflineOrders();
+              yield offlineOrders
+                .where((order) => order.vendorId == vendorId)
+                .toList()
+                ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+              await Future<void>.delayed(delay);
+              continue;
+            }
+            if (_shouldFallbackOrderStorage(error)) {
+              _logOrderFallback('watchVendorOrders($vendorId)', error);
+              final offlineOrders = await _readOfflineOrders();
+              yield offlineOrders
+                .where((order) => order.vendorId == vendorId)
+                .toList()
+                ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+              return;
+            }
+            throw _dataException(
+              error,
+              'Unable to load incoming orders right now.',
+            );
+          }
+        }
+      } finally {
+        _logDebug('watchVendorOrders unsubscribed vendorId=$vendorId');
+      }
+    })();
+  }
+
+  @override
+  Future<OrderModel?> getOrder(String orderId) async {
+    try {
+      final snapshot = await _orders.doc(orderId).get();
+      if (!snapshot.exists || snapshot.data() == null) {
+        final offlineOrders = await _readOfflineOrders();
+        return offlineOrders.where((order) => order.id == orderId).firstOrNull;
+      }
+      return OrderModel.fromMap(snapshot.data()!);
+    } catch (error) {
+      if (_shouldFallbackOrderStorage(error)) {
+        _logOrderFallback('getOrder($orderId)', error);
+        final offlineOrders = await _readOfflineOrders();
+        return offlineOrders.where((order) => order.id == orderId).firstOrNull;
+      }
+      throw _dataException(error, 'Unable to load this order right now.');
+    }
   }
 
   @override
   Future<void> createOrder(OrderModel order) async {
-    await _orders.doc(order.id).set(order.toMap());
+    try {
+      await _orders.doc(order.id).set(order.toMap()).timeout(
+        const Duration(seconds: 8),
+      );
+    } catch (error) {
+      if (_shouldFallbackOrderStorage(error)) {
+        _logOrderFallback('createOrder(${order.id})', error);
+        await _saveOfflineOrder(order);
+        return;
+      }
+      throw _dataException(error, 'Unable to place your order right now.');
+    }
   }
 
   @override
@@ -461,11 +686,21 @@ class FirebaseMarketplaceDataSource implements MarketplaceDataSource {
 
   @override
   Future<List<String>> fetchAvailableLocalities() async {
-    final shops = await _shops.get();
-    final localities =
-        shops.docs.map((doc) => doc.data()['locality'] as String? ?? '').toSet()
-          ..addAll(AppConstants.localities);
-    return localities.where((item) => item.isNotEmpty).toList()..sort();
+    try {
+      final shops = await _shops.get();
+      final localities =
+          shops.docs
+              .map((doc) => doc.data()['locality'] as String? ?? '')
+              .toSet()
+            ..addAll(AppConstants.localities);
+      return localities.where((item) => item.isNotEmpty).toList()..sort();
+    } catch (error) {
+      if (_isOfflineError(error)) {
+        _logOffline('fetchAvailableLocalities', error);
+        return [...AppConstants.localities]..sort();
+      }
+      throw _dataException(error, 'Unable to load localities right now.');
+    }
   }
 }
 

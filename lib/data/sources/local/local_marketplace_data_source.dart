@@ -349,6 +349,20 @@ class LocalMarketplaceDataSource implements MarketplaceDataSource {
   }
 
   @override
+  Future<OrderModel?> getOrder(String orderId) async {
+    final orders = _collection(
+      await _snapshot(),
+      'orders',
+    ).map(OrderModel.fromMap).toList();
+    for (final order in orders) {
+      if (order.id == orderId) {
+        return order;
+      }
+    }
+    return null;
+  }
+
+  @override
   Future<void> createOrder(OrderModel order) async {
     final orders = _collection(
       await _snapshot(),

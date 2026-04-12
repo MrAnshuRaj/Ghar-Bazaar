@@ -36,7 +36,7 @@ class VendorHomeScreen extends ConsumerWidget {
                   ),
                 ),
                 loading: () => const LinearProgressIndicator(),
-                error: (_, __) => const SizedBox.shrink(),
+                error: (_, _) => const SizedBox.shrink(),
               ),
               const SizedBox(height: 8),
               const Text(
@@ -103,7 +103,7 @@ class VendorHomeScreen extends ConsumerWidget {
                         value: '...',
                         icon: Icons.inventory_2_outlined,
                       ),
-                      error: (_, __) => const _StatCard(
+                      error: (_, _) => const _StatCard(
                         label: 'Products',
                         value: '-',
                         icon: Icons.inventory_2_outlined,
@@ -123,7 +123,7 @@ class VendorHomeScreen extends ConsumerWidget {
                         value: '...',
                         icon: Icons.receipt_long_outlined,
                       ),
-                      error: (_, __) => const _StatCard(
+                      error: (_, _) => const _StatCard(
                         label: 'Orders',
                         value: '-',
                         icon: Icons.receipt_long_outlined,
@@ -146,16 +146,40 @@ class VendorHomeScreen extends ConsumerWidget {
                 children: [
                   FilledButton.icon(
                     onPressed: () => context.push('/vendor/create-shop'),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(0, 40),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
                     icon: const Icon(Icons.store_mall_directory_outlined),
                     label: const Text('Create shop'),
                   ),
                   FilledButton.icon(
                     onPressed: () => context.push('/vendor/add-product'),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(0, 40),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
                     icon: const Icon(Icons.add_box_outlined),
                     label: const Text('Add product'),
                   ),
                   FilledButton.tonalIcon(
                     onPressed: () => context.go('/vendor/products'),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(0, 40),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
                     icon: const Icon(Icons.tune_rounded),
                     label: const Text('Manage listings'),
                   ),

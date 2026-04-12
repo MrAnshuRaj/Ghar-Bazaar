@@ -97,6 +97,7 @@ class _VendorProfileFormScreenState
     final existingProfile = ref.watch(vendorProfileProvider).asData?.value;
     final currentUser = ref.watch(currentAppUserProvider).asData?.value;
     final session = ref.read(authRepositoryProvider).currentSession;
+    final isEditing = existingProfile != null;
     if (!_initialized) {
       if (existingProfile != null) {
         _ownerController.text = existingProfile.ownerName;
@@ -112,7 +113,7 @@ class _VendorProfileFormScreenState
         final fallbackName =
             currentUser?.name ??
             session?.displayName ??
-            (session == null ? null : session.email.split('@').first);
+            session?.email.split('@').first;
         final fallbackPhone = currentUser?.phone;
         if ((fallbackName ?? '').isNotEmpty ||
             (fallbackPhone ?? '').isNotEmpty) {
@@ -123,7 +124,9 @@ class _VendorProfileFormScreenState
       }
     }
     return Scaffold(
-      appBar: AppBar(title: const Text('Create vendor profile')),
+      appBar: AppBar(
+        title: Text(isEditing ? 'Edit vendor profile' : 'Create vendor profile'),
+      ),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
@@ -139,7 +142,9 @@ class _VendorProfileFormScreenState
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Set up your vendor profile',
+                          isEditing
+                              ? 'Update your vendor profile'
+                              : 'Set up your vendor profile',
                           style: Theme.of(context).textTheme.headlineSmall
                               ?.copyWith(fontWeight: FontWeight.w900),
                         ),
@@ -190,7 +195,7 @@ class _VendorProfileFormScreenState
                         const SizedBox(height: 14),
                         localities.when(
                           data: (items) => DropdownButtonFormField<String>(
-                            value: _locality,
+                            initialValue: _locality,
                             decoration: const InputDecoration(
                               labelText: 'Locality',
                             ),
@@ -209,7 +214,7 @@ class _VendorProfileFormScreenState
                                 : null,
                           ),
                           loading: () => const LinearProgressIndicator(),
-                          error: (_, __) =>
+                          error: (_, _) =>
                               const Text('Unable to load localities'),
                         ),
                         const SizedBox(height: 14),
@@ -236,7 +241,7 @@ class _VendorProfileFormScreenState
                         ),
                         const SizedBox(height: 20),
                         AppPrimaryButton(
-                          label: 'Save & Continue',
+                          label: isEditing ? 'Save Changes' : 'Save & Continue',
                           icon: Icons.check_circle_outline_rounded,
                           onPressed: _submit,
                           isLoading: _submitting,

@@ -31,6 +31,7 @@ abstract class MarketplaceDataSource {
 
   Stream<List<OrderModel>> watchCustomerOrders(String customerId);
   Stream<List<OrderModel>> watchVendorOrders(String vendorId);
+  Future<OrderModel?> getOrder(String orderId);
   Future<void> createOrder(OrderModel order);
   Future<void> updateOrderStatus(String orderId, OrderStatus status);
 
